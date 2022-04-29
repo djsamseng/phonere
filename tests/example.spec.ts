@@ -28,7 +28,10 @@ test.describe('Get Phone Numbers', () => {
           const nameRow = row["Name(s)"].split(" ");
           const firstName = nameRow[0];
           const lastName = nameRow[nameRow.length - 1];
-          const phoneNumber = await getPhoneNumber({
+          if (row['Phone Number'].length > 0) {
+            continue;
+          }
+          let phoneNumber = await getPhoneNumber({
             page,
             firstName: firstName,
             lastName: lastName,
@@ -36,10 +39,19 @@ test.describe('Get Phone Numbers', () => {
             town: row.Town,
             state: "Connecticut",
           });
+          if (phoneNumber.length === 0) {
+            phoneNumber = await getPhoneNumberClustrMaps({
+              page,
+              firstName: firstName,
+              lastName: lastName,
+              address: row.Address,
+              town: row.Town,
+              state: "Connecticut",
+            });
+          }
           row['Phone Number'] = phoneNumber;
           console.log("Got phone:", phoneNumber);
         }
-        console.log("New rows:", rows);
         const csvWriter = createObjectCsvWriter({
           path: WRITEFILE,
           header: [
@@ -93,7 +105,7 @@ async function getPhoneNumber({
     const numVoterRecordsText = await page.locator('.TopH1').first().textContent();
     if (numVoterRecordsText.indexOf("0 Voter Records") >= 0) {
       console.log(numVoterRecordsText);
-      return ;
+      return "";
     }
   }
 
@@ -147,4 +159,44 @@ async function selectorExists(page: Page, selector: string): Promise<boolean> {
     return false;
     // Not present - can continue
   }
+}
+
+function replaceAddressForClustrMaps(address: string, town: string): string {
+  address = address.replace("Drive", "Dr");
+  address = address.replace("Street", "St");
+  address = address.replace("Road", "Rd");
+  address = address.replace("Lane", "Ln");
+  address = address.replace("Trail", "Trail");
+  address = address.replace("Parkway", "Pkwy");
+  address = address.replace("Avenue", "Ave");
+  address = address.replace("Unit ", "#");
+  address = address.replace("Turnpike", "Turnpike");
+  address = address.replace("Court", "Ct");
+  return `${address}, ${town}, CT`
+}
+
+async function getPhoneNumberClustrMaps({ page, firstName, lastName, address, town, state}: { page: Page, firstName, lastName, address, town, state }): Promise<string> {
+  await page.goto("https://clustrmaps.com");
+
+  await page.locator('[placeholder="Address"]').click();
+  const addr = replaceAddressForClustrMaps(address, town);
+  await page.locator('[placeholder="Address"]').fill(addr);
+  await page.locator('[placeholder="Address"]').press('Enter');
+  let hasSecurityCheck = await selectorExists(page, ':has-text("Please complete the security check to access")');
+  if (hasSecurityCheck) {
+     await page.pause();
+  }
+  const hasName = await selectorExists(page, `span:text("${firstName}"):text("${lastName}")`);
+  if (!hasName) {
+    console.log("Did not find name");
+    return "";
+  }
+  const phoneSelector = `.card-body:has-text("${firstName}").card-body:has-text("${lastName}") > * span[itemprop="telephone"]`
+  const hasPhone = await selectorExists(page, phoneSelector);
+  if (!hasPhone) {
+    console.log("Has name but not phone");
+    return ""
+  }
+  const phoneNumber = await page.locator(phoneSelector).first().textContent();
+  return phoneNumber;
 }
